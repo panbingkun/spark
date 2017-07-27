@@ -31,7 +31,6 @@ class SparkPlanInfo(
     val nodeName: String,
     val simpleString: String,
     val children: Seq[SparkPlanInfo],
-    val metadata: Map[String, String],
     val metrics: Seq[SQLMetricInfo]) {
 
   override def hashCode(): Int = {
@@ -47,7 +46,7 @@ class SparkPlanInfo(
   }
 }
 
-private[sql] object SparkPlanInfo {
+private[execution] object SparkPlanInfo {
 
   def fromSparkPlan(plan: SparkPlan): SparkPlanInfo = {
     val children = plan match {
@@ -58,7 +57,6 @@ private[sql] object SparkPlanInfo {
       new SQLMetricInfo(metric.name.getOrElse(key), metric.id, metric.metricType)
     }
 
-    new SparkPlanInfo(plan.nodeName, plan.simpleString, children.map(fromSparkPlan),
-      plan.metadata, metrics)
+    new SparkPlanInfo(plan.nodeName, plan.simpleString, children.map(fromSparkPlan), metrics)
   }
 }

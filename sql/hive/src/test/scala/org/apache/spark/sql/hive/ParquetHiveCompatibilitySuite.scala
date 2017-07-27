@@ -45,14 +45,14 @@ class ParquetHiveCompatibilitySuite extends ParquetCompatibilityTest with TestHi
   private def testParquetHiveCompatibility(row: Row, hiveTypes: String*): Unit = {
     withTable("parquet_compat") {
       withTempPath { dir =>
-        val path = dir.getCanonicalPath
+        val path = dir.toURI.toString
 
         // Hive columns are always nullable, so here we append a all-null row.
         val rows = row :: Row(Seq.fill(row.length)(null): _*) :: Nil
 
         // Don't convert Hive metastore Parquet tables to let Hive write those Parquet files.
         withSQLConf(HiveUtils.CONVERT_METASTORE_PARQUET.key -> "false") {
-          withTempTable("data") {
+          withTempView("data") {
             val fields = hiveTypes.zipWithIndex.map { case (typ, index) => s"  col_$index $typ" }
 
             val ddl =

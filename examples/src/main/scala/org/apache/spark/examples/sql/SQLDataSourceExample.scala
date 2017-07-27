@@ -16,6 +16,8 @@
  */
 package org.apache.spark.examples.sql
 
+import java.util.Properties
+
 import org.apache.spark.sql.SparkSession
 
 object SQLDataSourceExample {
@@ -25,7 +27,7 @@ object SQLDataSourceExample {
   def main(args: Array[String]) {
     val spark = SparkSession
       .builder()
-      .appName("Spark SQL Data Soures Example")
+      .appName("Spark SQL data sources example")
       .config("spark.some.config.option", "some-value")
       .getOrCreate()
 
@@ -33,6 +35,7 @@ object SQLDataSourceExample {
     runBasicParquetExample(spark)
     runParquetSchemaMergingExample(spark)
     runJsonDatasetExample(spark)
+    runJdbcDatasetExample(spark)
 
     spark.stop()
   }
@@ -49,6 +52,22 @@ object SQLDataSourceExample {
     // $example on:direct_sql$
     val sqlDF = spark.sql("SELECT * FROM parquet.`examples/src/main/resources/users.parquet`")
     // $example off:direct_sql$
+    // $example on:write_sorting_and_bucketing$
+    peopleDF.write.bucketBy(42, "name").sortBy("age").saveAsTable("people_bucketed")
+    // $example off:write_sorting_and_bucketing$
+    // $example on:write_partitioning$
+    usersDF.write.partitionBy("favorite_color").format("parquet").save("namesPartByColor.parquet")
+    // $example off:write_partitioning$
+    // $example on:write_partition_and_bucket$
+    peopleDF
+      .write
+      .partitionBy("favorite_color")
+      .bucketBy(42, "name")
+      .saveAsTable("people_partitioned_bucketed")
+    // $example off:write_partition_and_bucket$
+
+    spark.sql("DROP TABLE IF EXISTS people_bucketed")
+    spark.sql("DROP TABLE IF EXISTS people_partitioned_bucketed")
   }
 
   private def runBasicParquetExample(spark: SparkSession): Unit = {
@@ -99,15 +118,19 @@ object SQLDataSourceExample {
     // The final schema consists of all 3 columns in the Parquet files together
     // with the partitioning column appeared in the partition directory paths
     // root
-    // |-- value: int (nullable = true)
-    // |-- square: int (nullable = true)
-    // |-- cube: int (nullable = true)
-    // |-- key : int (nullable = true)
+    //  |-- value: int (nullable = true)
+    //  |-- square: int (nullable = true)
+    //  |-- cube: int (nullable = true)
+    //  |-- key: int (nullable = true)
     // $example off:schema_merging$
   }
 
   private def runJsonDatasetExample(spark: SparkSession): Unit = {
     // $example on:json_dataset$
+    // Primitive types (Int, String, etc) and Product types (case classes) encoders are
+    // supported by importing this when creating a Dataset.
+    import spark.implicits._
+
     // A JSON dataset is pointed to by path.
     // The path can be either a single text file or a directory storing text files
     val path = "examples/src/main/resources/people.json"
@@ -132,10 +155,10 @@ object SQLDataSourceExample {
     // +------+
 
     // Alternatively, a DataFrame can be created for a JSON dataset represented by
-    // an RDD[String] storing one JSON object per string
-    val otherPeopleRDD = spark.sparkContext.makeRDD(
+    // a Dataset[String] storing one JSON object per string
+    val otherPeopleDataset = spark.createDataset(
       """{"name":"Yin","address":{"city":"Columbus","state":"Ohio"}}""" :: Nil)
-    val otherPeople = spark.read.json(otherPeopleRDD)
+    val otherPeople = spark.read.json(otherPeopleDataset)
     otherPeople.show()
     // +---------------+----+
     // |        address|name|
@@ -145,4 +168,40 @@ object SQLDataSourceExample {
     // $example off:json_dataset$
   }
 
+  private def runJdbcDatasetExample(spark: SparkSession): Unit = {
+    // $example on:jdbc_dataset$
+    // Note: JDBC loading and saving can be achieved via either the load/save or jdbc methods
+    // Loading data from a JDBC source
+    val jdbcDF = spark.read
+      .format("jdbc")
+      .option("url", "jdbc:postgresql:dbserver")
+      .option("dbtable", "schema.tablename")
+      .option("user", "username")
+      .option("password", "password")
+      .load()
+
+    val connectionProperties = new Properties()
+    connectionProperties.put("user", "username")
+    connectionProperties.put("password", "password")
+    val jdbcDF2 = spark.read
+      .jdbc("jdbc:postgresql:dbserver", "schema.tablename", connectionProperties)
+
+    // Saving data to a JDBC source
+    jdbcDF.write
+      .format("jdbc")
+      .option("url", "jdbc:postgresql:dbserver")
+      .option("dbtable", "schema.tablename")
+      .option("user", "username")
+      .option("password", "password")
+      .save()
+
+    jdbcDF2.write
+      .jdbc("jdbc:postgresql:dbserver", "schema.tablename", connectionProperties)
+
+    // Specifying create table column data types on write
+    jdbcDF.write
+      .option("createTableColumnTypes", "name CHAR(64), comments VARCHAR(1024)")
+      .jdbc("jdbc:postgresql:dbserver", "schema.tablename", connectionProperties)
+    // $example off:jdbc_dataset$
+  }
 }

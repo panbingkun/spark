@@ -51,6 +51,7 @@ class VectorAssembler @Since("1.4.0") (@Since("1.4.0") override val uid: String)
 
   @Since("2.0.0")
   override def transform(dataset: Dataset[_]): DataFrame = {
+    transformSchema(dataset.schema, logging = true)
     // Schema transformation.
     val schema = dataset.schema
     lazy val first = dataset.toDF.first()
@@ -112,12 +113,15 @@ class VectorAssembler @Since("1.4.0") (@Since("1.4.0") override val uid: String)
   override def transformSchema(schema: StructType): StructType = {
     val inputColNames = $(inputCols)
     val outputColName = $(outputCol)
-    val inputDataTypes = inputColNames.map(name => schema(name).dataType)
-    inputDataTypes.foreach {
-      case _: NumericType | BooleanType =>
-      case t if t.isInstanceOf[VectorUDT] =>
-      case other =>
-        throw new IllegalArgumentException(s"Data type $other is not supported.")
+    val incorrectColumns = inputColNames.flatMap { name =>
+      schema(name).dataType match {
+        case _: NumericType | BooleanType => None
+        case t if t.isInstanceOf[VectorUDT] => None
+        case other => Some(s"Data type $other of column $name is not supported.")
+      }
+    }
+    if (incorrectColumns.nonEmpty) {
+      throw new IllegalArgumentException(incorrectColumns.mkString("\n"))
     }
     if (schema.fieldNames.contains(outputColName)) {
       throw new IllegalArgumentException(s"Output column $outputColName already exists.")

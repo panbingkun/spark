@@ -15,6 +15,12 @@
  * limitations under the License.
  */
 
+var appLimit = -1;
+
+function setAppLimit(val) {
+    appLimit = val;
+}
+
 function makeIdNumeric(id) {
   var strs = id.split("_");
   if (strs.length < 3) {
@@ -72,6 +78,12 @@ jQuery.extend( jQuery.fn.dataTableExt.oSort, {
     }
 } );
 
+jQuery.extend( jQuery.fn.dataTableExt.ofnSearch, {
+    "appid-numeric": function ( a ) {
+        return a.replace(/[\r\n]/g, " ").replace(/<.*?>/g, "");
+    }
+} );
+
 $(document).ajaxStop($.unblockUI);
 $(document).ajaxStart(function(){
     $.blockUI({ message: '<h3>Loading history summary...</h3>'});
@@ -89,7 +101,7 @@ $(document).ready(function() {
     requestedIncomplete = getParameterByName("showIncomplete", searchString);
     requestedIncomplete = (requestedIncomplete == "true" ? true : false);
 
-    $.getJSON("api/v1/applications", function(response,status,jqXHR) {
+    $.getJSON("api/v1/applications?limit=" + appLimit, function(response,status,jqXHR) {
       var array = [];
       var hasMultipleAttempts = false;
       for (i in response) {
@@ -108,12 +120,19 @@ $(document).ready(function() {
           attempt["startTime"] = formatDate(attempt["startTime"]);
           attempt["endTime"] = formatDate(attempt["endTime"]);
           attempt["lastUpdated"] = formatDate(attempt["lastUpdated"]);
+          attempt["log"] = uiRoot + "/api/v1/applications/" + id + "/" +
+            (attempt.hasOwnProperty("attemptId") ? attempt["attemptId"] + "/" : "") + "logs";
+
           var app_clone = {"id" : id, "name" : name, "num" : num, "attempts" : [attempt]};
           array.push(app_clone);
         }
       }
 
-      var data = {"applications": array}
+      var data = {
+        "uiroot": uiRoot,
+        "applications": array
+        }
+
       $.get("static/historypage-template.html", function(template) {
         historySummary.append(Mustache.render($(template).filter("#history-summary-template").html(),data));
         var selector = "#history-summary-table";
@@ -127,6 +146,10 @@ $(document).ready(function() {
                         {name: 'sixth', type: "title-numeric"},
                         {name: 'seventh'},
                         {name: 'eighth'},
+                        {name: 'ninth'},
+                    ],
+                    "columnDefs": [
+                        {"searchable": false, "targets": [5]}
                     ],
                     "autoWidth": false,
                     "order": [[ 4, "desc" ]]
@@ -154,10 +177,22 @@ $(document).ready(function() {
           }
         }
 
-        var durationCells = document.getElementsByClassName("durationClass");
-        for (i = 0; i < durationCells.length; i++) {
-          var timeInMilliseconds = parseInt(durationCells[i].title);
-          durationCells[i].innerHTML = formatDuration(timeInMilliseconds);
+        if (requestedIncomplete) {
+          var completedCells = document.getElementsByClassName("completedColumn");
+          for (i = 0; i < completedCells.length; i++) {
+            completedCells[i].style.display='none';
+          }
+
+          var durationCells = document.getElementsByClassName("durationColumn");
+          for (i = 0; i < durationCells.length; i++) {
+            durationCells[i].style.display='none';
+          }
+        } else {
+          var durationCells = document.getElementsByClassName("durationClass");
+          for (i = 0; i < durationCells.length; i++) {
+            var timeInMilliseconds = parseInt(durationCells[i].title);
+            durationCells[i].innerHTML = formatDuration(timeInMilliseconds);
+          }
         }
 
         if ($(selector.concat(" tr")).length < 20) {
@@ -165,7 +200,7 @@ $(document).ready(function() {
         }
 
         $(selector).DataTable(conf);
-        $('#hisotry-summary [data-toggle="tooltip"]').tooltip();
+        $('#history-summary [data-toggle="tooltip"]').tooltip();
       });
     });
 });

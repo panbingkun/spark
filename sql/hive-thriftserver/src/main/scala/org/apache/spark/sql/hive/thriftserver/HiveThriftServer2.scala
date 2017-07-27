@@ -34,7 +34,7 @@ import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
 import org.apache.spark.scheduler.{SparkListener, SparkListenerApplicationEnd, SparkListenerJobStart}
 import org.apache.spark.sql.SQLContext
-import org.apache.spark.sql.hive.{HiveSharedState, HiveUtils}
+import org.apache.spark.sql.hive.HiveUtils
 import org.apache.spark.sql.hive.thriftserver.ReflectionUtils._
 import org.apache.spark.sql.hive.thriftserver.ui.ThriftServerTab
 import org.apache.spark.sql.internal.SQLConf
@@ -46,7 +46,7 @@ import org.apache.spark.util.{ShutdownHookManager, Utils}
  */
 object HiveThriftServer2 extends Logging {
   var LOG = LogFactory.getLog(classOf[HiveServer2])
-  var uiTab: Option[ThriftServerTab] = _
+  var uiTab: Option[ThriftServerTab] = None
   var listener: HiveThriftServer2Listener = _
 
   /**
@@ -294,7 +294,7 @@ private[hive] class HiveThriftServer2(sqlContext: SQLContext)
 
   private def isHTTPTransportMode(hiveConf: HiveConf): Boolean = {
     val transportMode = hiveConf.getVar(ConfVars.HIVE_SERVER2_TRANSPORT_MODE)
-    transportMode.toLowerCase(Locale.ENGLISH).equals("http")
+    transportMode.toLowerCase(Locale.ROOT).equals("http")
   }
 
 

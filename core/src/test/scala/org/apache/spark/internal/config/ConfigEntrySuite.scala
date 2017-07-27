@@ -17,13 +17,12 @@
 
 package org.apache.spark.internal.config
 
+import java.util.Locale
 import java.util.concurrent.TimeUnit
-
-import scala.collection.JavaConverters._
-import scala.collection.mutable.HashMap
 
 import org.apache.spark.{SparkConf, SparkFunSuite}
 import org.apache.spark.network.util.ByteUnit
+import org.apache.spark.util.SparkConfWithEnv
 
 class ConfigEntrySuite extends SparkFunSuite {
 
@@ -97,6 +96,21 @@ class ConfigEntrySuite extends SparkFunSuite {
     assert(conf.get(bytes) === 1L)
   }
 
+  test("conf entry: regex") {
+    val conf = new SparkConf()
+    val rConf = ConfigBuilder(testKey("regex")).regexConf.createWithDefault(".*".r)
+
+    conf.set(rConf, "[0-9a-f]{8}".r)
+    assert(conf.get(rConf).toString === "[0-9a-f]{8}")
+
+    conf.set(rConf.key, "[0-9a-f]{4}")
+    assert(conf.get(rConf).toString === "[0-9a-f]{4}")
+
+    conf.set(rConf.key, "[.")
+    val e = intercept[IllegalArgumentException](conf.get(rConf))
+    assert(e.getMessage.contains("regex should be a regex, but was"))
+  }
+
   test("conf entry: string seq") {
     val conf = new SparkConf()
     val seq = ConfigBuilder(testKey("seq")).stringConf.toSequence.createWithDefault(Seq())
@@ -119,12 +133,34 @@ class ConfigEntrySuite extends SparkFunSuite {
     val conf = new SparkConf()
     val transformationConf = ConfigBuilder(testKey("transformation"))
       .stringConf
-      .transform(_.toLowerCase())
+      .transform(_.toLowerCase(Locale.ROOT))
       .createWithDefault("FOO")
 
     assert(conf.get(transformationConf) === "foo")
     conf.set(transformationConf, "BAR")
     assert(conf.get(transformationConf) === "bar")
+  }
+
+  test("conf entry: checkValue()") {
+    def createEntry(default: Int): ConfigEntry[Int] =
+      ConfigBuilder(testKey("checkValue"))
+        .intConf
+        .checkValue(value => value >= 0, "value must be non-negative")
+        .createWithDefault(default)
+
+    val conf = new SparkConf()
+
+    val entry = createEntry(10)
+    conf.set(entry, -1)
+    val e1 = intercept[IllegalArgumentException] {
+      conf.get(entry)
+    }
+    assert(e1.getMessage == "value must be non-negative")
+
+    val e2 = intercept[IllegalArgumentException] {
+      createEntry(-1)
+    }
+    assert(e2.getMessage == "value must be non-negative")
   }
 
   test("conf entry: valid values check") {
@@ -161,25 +197,9 @@ class ConfigEntrySuite extends SparkFunSuite {
     assert(conf.get(stringConf) === null)
   }
 
-  test("variable expansion") {
+  test("variable expansion of spark config entries") {
     val env = Map("ENV1" -> "env1")
-    val conf = HashMap("spark.value1" -> "value1", "spark.value2" -> "value2")
-
-    def getenv(key: String): String = env.getOrElse(key, null)
-
-    def expand(value: String): String = ConfigEntry.expand(value, conf.asJava, getenv, Set())
-
-    assert(expand("${spark.value1}") === "value1")
-    assert(expand("spark.value1 is: ${spark.value1}") === "spark.value1 is: value1")
-    assert(expand("${spark.value1} ${spark.value2}") === "value1 value2")
-    assert(expand("${spark.value3}") === "${spark.value3}")
-
-    // Make sure anything that is not in the "spark." namespace is ignored.
-    conf("notspark.key") = "value"
-    assert(expand("${notspark.key}") === "${notspark.key}")
-
-    assert(expand("${env:ENV1}") === "env1")
-    assert(expand("${system:user.name}") === sys.props("user.name"))
+    val conf = new SparkConfWithEnv(env)
 
     val stringConf = ConfigBuilder(testKey("stringForExpansion"))
       .stringConf
@@ -193,45 +213,79 @@ class ConfigEntrySuite extends SparkFunSuite {
     val fallbackConf = ConfigBuilder(testKey("fallbackForExpansion"))
       .fallbackConf(intConf)
 
-    assert(expand("${" + stringConf.key + "}") === "string1")
-    assert(expand("${" + optionalConf.key + "}") === "${" + optionalConf.key + "}")
-    assert(expand("${" + intConf.key + "}") === "42")
-    assert(expand("${" + fallbackConf.key + "}") === "42")
-
-    conf(optionalConf.key) = "string2"
-    assert(expand("${" + optionalConf.key + "}") === "string2")
-
-    conf(fallbackConf.key) = "84"
-    assert(expand("${" + fallbackConf.key + "}") === "84")
-
-    assert(expand("${spark.value1") === "${spark.value1")
-
-    // Unknown prefixes.
-    assert(expand("${unknown:value}") === "${unknown:value}")
-
-    // Chained references.
-    val conf1 = ConfigBuilder(testKey("conf1"))
+    val refConf = ConfigBuilder(testKey("configReferenceTest"))
       .stringConf
-      .createWithDefault("value1")
-    val conf2 = ConfigBuilder(testKey("conf2"))
-      .stringConf
-      .createWithDefault("value2")
+      .createWithDefault(null)
 
-    conf(conf2.key) = "${" + conf1.key + "}"
-    assert(expand("${" + conf2.key + "}") === conf1.defaultValueString)
+    def ref(entry: ConfigEntry[_]): String = "${" + entry.key + "}"
 
-    // Circular references.
-    conf(conf1.key) = "${" + conf2.key + "}"
-    val e = intercept[IllegalArgumentException] {
-      expand("${" + conf2.key + "}")
+    def testEntryRef(entry: ConfigEntry[_], expected: String): Unit = {
+      conf.set(refConf, ref(entry))
+      assert(conf.get(refConf) === expected)
     }
-    assert(e.getMessage().contains("Circular"))
+
+    testEntryRef(stringConf, "string1")
+    testEntryRef(intConf, "42")
+    testEntryRef(fallbackConf, "42")
+
+    testEntryRef(optionalConf, ref(optionalConf))
+
+    conf.set(optionalConf, ref(stringConf))
+    testEntryRef(optionalConf, "string1")
+
+    conf.set(optionalConf, ref(fallbackConf))
+    testEntryRef(optionalConf, "42")
 
     // Default string values with variable references.
     val parameterizedStringConf = ConfigBuilder(testKey("stringWithParams"))
       .stringConf
-      .createWithDefault("${spark.value1}")
-    assert(parameterizedStringConf.readFrom(conf.asJava, getenv) === conf("spark.value1"))
+      .createWithDefault(ref(stringConf))
+    assert(conf.get(parameterizedStringConf) === conf.get(stringConf))
+
+    // Make sure SparkConf's env override works.
+    conf.set(refConf, "${env:ENV1}")
+    assert(conf.get(refConf) === env("ENV1"))
+
+    // Conf with null default value is not expanded.
+    val nullConf = ConfigBuilder(testKey("nullString"))
+      .stringConf
+      .createWithDefault(null)
+    testEntryRef(nullConf, ref(nullConf))
   }
 
+  test("conf entry : default function") {
+    var data = 0
+    val conf = new SparkConf()
+    val iConf = ConfigBuilder(testKey("intval")).intConf.createWithDefaultFunction(() => data)
+    assert(conf.get(iConf) === 0)
+    data = 2
+    assert(conf.get(iConf) === 2)
+  }
+
+  test("conf entry: alternative keys") {
+    val conf = new SparkConf()
+    val iConf = ConfigBuilder(testKey("a"))
+      .withAlternative(testKey("b"))
+      .withAlternative(testKey("c"))
+      .intConf.createWithDefault(0)
+
+    // no key is set, return default value.
+    assert(conf.get(iConf) === 0)
+
+    // the primary key is set, the alternative keys are not set, return the value of primary key.
+    conf.set(testKey("a"), "1")
+    assert(conf.get(iConf) === 1)
+
+    // the primary key and alternative keys are all set, return the value of primary key.
+    conf.set(testKey("b"), "2")
+    conf.set(testKey("c"), "3")
+    assert(conf.get(iConf) === 1)
+
+    // the primary key is not set, (some of) the alternative keys are set, return the value of the
+    // first alternative key that is set.
+    conf.remove(testKey("a"))
+    assert(conf.get(iConf) === 2)
+    conf.remove(testKey("b"))
+    assert(conf.get(iConf) === 3)
+  }
 }
